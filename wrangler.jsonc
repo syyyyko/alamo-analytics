@@ -1,0 +1,29 @@
+{
+	// Night Wheels analytics: one Cloudflare Worker (API + ingest) + D1 (sessions, lines, map points) + the dashboard in ./public
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "nightwheels-analytics",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-09-01",
+	"assets": {
+		"directory": "./public",
+		"binding": "ASSETS",
+		"not_found_handling": "single-page-application",
+		"run_worker_first": ["/api/*", "/ingest", "/ingest/*", "/game/*", "/roblox/*", "/__scheduled", "/health", "/admin/*"]
+	},
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "nightwheels",
+			// from `wrangler d1 create nightwheels` (2026-11-11)
+			"database_id": "0564528d-9d5b-4279-8e29-b34fd021452f",
+			"migrations_dir": "migrations"
+		}
+	],
+	// every minute: pack one ended session's chunks into one (and the optional KEEP_LINES_DAYS trim)
+	"triggers": { "crons": ["* * * * *"] },
+	"observability": { "enabled": true },
+	// the game's universe (public): "playing now" on the dashboard comes from Roblox's games API
+	"vars": { "UNIVERSE_ID": "10772293546" }
+	// secrets (wrangler secret put ...): INGEST_KEY (same as the game's AnalyticsConfig.Key), DASH_PASSWORD,
+	// optional ROBLOX_WEBHOOK_SECRET (Creator Hub webhook for right-to-erasure requests)
+}

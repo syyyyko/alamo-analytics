@@ -1,0 +1,9 @@
+# secrets and where the backend lives: never in git
+.ingest-key
+.agent-key
+.dev.vars
+.base-url
+# local state
+.wrangler/
+node_modules/
+*.log
