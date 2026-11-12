@@ -456,3 +456,6 @@ td .no svg.icon { color: var(--bad); width: 15px; height: 15px; }
 @media (prefers-reduced-motion: reduce) { .replay .hud .big { animation: none; } }
 .replay .hud .frame.full { inset: 0; }
 .replay .hud .frame.full img { width: 100%; height: 100%; max-width: none; max-height: none; object-fit: fill; box-shadow: none; border-radius: 0; opacity: 1; }
+/* (an element with a display of its own, e.g. the replay's window picture, still hides with the hidden attribute: 2026-11-12, the
+   Garage picture stayed up the whole replay) */
+[hidden] { display: none !important; }
