@@ -400,15 +400,13 @@ button.small.danger { color: var(--bad); }
 .card.down button { margin-top: 8px; }
 .banner.maint { margin-bottom: 16px; justify-content: flex-start; }
 
-/* ---------- 2026-11-12: Xisty Analytics, language, pages of lists, clusters, replay moments ---------- */
+/* ---------- 2026-11-12: Alamo Analytics, language, pages of lists, clusters, replay moments ---------- */
 .brand small { color: var(--muted); font-size: 11.5px; margin-top: 4px; letter-spacing: 0.02em; }
 .side nav a span { flex: 1; }
 .lang { display: flex; align-items: center; gap: 4px; }
 .lang svg.icon { width: 16px; height: 16px; color: var(--muted); margin-right: 2px; }
 .lang button { background: transparent; color: var(--ink-2); box-shadow: inset 0 0 0 1px var(--ring); padding: 2px 9px; }
 .lang button.on { background: var(--s1); color: #fff; box-shadow: none; }
-.credit { color: var(--muted); font-size: 11.5px; }
-.credit b { color: var(--ink-2); font-weight: 600; }
 .hint { margin: -6px 0 10px; font-size: 13px; }
 h2 svg.icon { vertical-align: -3px; margin-right: 4px; }
 td .ok, td .no { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
@@ -456,3 +454,5 @@ td .no svg.icon { color: var(--bad); width: 15px; height: 15px; }
 .replay .hud .event svg.icon, .replay .hud .win svg.icon { width: 14px; height: 14px; vertical-align: -2px; }
 @keyframes nwPop { from { transform: translate(-50%, -50%) scale(1.25); opacity: 0; } to { transform: translate(-50%, -50%) scale(1); opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .replay .hud .big { animation: none; } }
+.replay .hud .frame.full { inset: 0; }
+.replay .hud .frame.full img { width: 100%; height: 100%; max-width: none; max-height: none; object-fit: fill; box-shadow: none; border-radius: 0; opacity: 1; }

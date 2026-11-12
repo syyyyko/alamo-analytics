@@ -1,6 +1,6 @@
-# Xisty Analytics
+# Alamo Analytics
 
-Analytics for the Roblox game **Night Wheels**, made by **Xisty**.
+Analytics for the Roblox game **Night Wheels**.
 
 It has three parts:
 
@@ -117,6 +117,5 @@ node tools/ask.mjs digest 7
 
 ## En español
 
-**Xisty Analytics**, hecho por **Xisty**, son las analíticas de Night Wheels. El juego manda cada sesión **una sola vez, al salir el jugador**; si la sesión dura más de 20 minutos, también manda una parte cada 20. El backend la guarda en una fila, así que son unas 5 escrituras por jugador. El panel está en inglés por defecto; el idioma se cambia abajo a la izquierda (EN / ES). Para actualizar el backend usa siempre `node tools/deploy.mjs 10`.
+**Alamo Analytics** son las analíticas de Night Wheels. El juego manda cada sesión **una sola vez, al salir el jugador**; si la sesión dura más de 20 minutos, también manda una parte cada 20. El backend la guarda en una fila, así que son unas 5 escrituras por jugador. El panel está en inglés por defecto; el idioma se cambia abajo a la izquierda (EN / ES). Para actualizar el backend usa siempre `node tools/deploy.mjs 10`.
 
-Credits: design, game and analytics by **Xisty**.

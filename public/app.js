@@ -1,5 +1,5 @@
-// Xisty Analytics (for Night Wheels): players → a player → a session → a moment (timeline, map, replay). Plain JS, no
-// build. Made by Xisty.
+// Alamo Analytics (for Night Wheels): players → a player → a session → a moment (timeline, map, replay). Plain JS, no
+// build.
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const app = $("#app");
@@ -370,8 +370,8 @@ function showLogin() {
 	$("#logout").hidden = true;
 	app.innerHTML = `
 	<div class="card login">
-		<h1>Xisty Analytics</h1>
-		<p class="muted">Night Wheels · ${T("made by Xisty", "hecho por Xisty")}</p>
+		<h1>Alamo Analytics</h1>
+		<p class="muted">Night Wheels</p>
 		<form id="login">
 			<input type="password" name="password" placeholder="${T("Password", "Contraseña")}" autocomplete="current-password" autofocus />
 			<button>${T("Sign in", "Entrar")}</button>
@@ -1069,7 +1069,7 @@ async function home() {
 		else location.hash = `#/sesiones?q=${encodeURIComponent(q)}`;
 	};
 	$("#aicopy").onclick = async () => {
-		const res = await fetch(`/api/digest?days=${state.days}`, { credentials: "same-origin" });
+		const res = await fetch(`/api/digest?days=${state.days}&lang=${LANG}`, { credentials: "same-origin" });
 		const body = await res.text();
 		try {
 			await navigator.clipboard.writeText(body);
@@ -1263,7 +1263,7 @@ function funnelHtml(rows) {
 			const reached = [];
 			for (let k = 1; k <= steps; k++) {
 				const n = list.filter((r) => r.done || (r.step || 0) >= k).reduce((a, r) => a + r.n, 0);
-				reached.push({ k, n, name: names[k] });
+				reached.push({ k, n, name: stepLabel(version, k, names[k]) });
 			}
 			reached.push({ k: "done", n: done, name: "" });
 			return `<h2 style="font-size:13px;margin-top:6px">Tutorial ${esc(version)} · ${T(`${int(total)} new`, `${int(total)} nuevos`)}</h2>${bars(reached, {
@@ -1503,8 +1503,36 @@ const MOMENTS = [
 	{ test: (l) => PRESSED(l) && /Crash > Skip/.test(l.s), label: () => "SKIP", cls: "blue", hold: 1.4 },
 	{ test: (l) => l.k === "compra", label: () => T("PURCHASE", "COMPRA"), cls: "good", hold: 2 },
 ];
-// The windows we have a picture of (public/frames/<key>.jpg, the game's own; captured in Studio)
-const FRAMES = new Set(window.NW_FRAMES || []);
+// The windows we have a picture of (public/frames, captured in Studio from the game itself, 2026-11-12): key → file;
+// full: a whole-screen one (transparent but for its pieces), laid over the whole replay
+const FRAMES = window.NW_FRAMES || {};
+
+// The tutorial's steps by name, both versions (from the game's TutorialConfig + SessionReportConfig.Steps, 2026-11-12;
+// the user: "algunos steps no tienen el name, salen nomas el numero"): a step nobody stopped on had no name to show
+const STEP_NAMES = {
+	A: [
+		["go to the dealership", "ir al concesionario"], ["pick the free bike", "elegir la moto gratis"], ["press BUY", "presionar BUY"],
+		["close with BACK / CONTINUE", "cerrar con BACK / CONTINUE"], ["open the GARAGE", "abrir el GARAGE"], ["pick their bike", "elegir su moto"],
+		["press SPAWN", "presionar SPAWN"], ["enter the TUNING BAY", "entrar al TUNING BAY"], ["upgrade the EXHAUST for free", "mejorar el EXHAUST gratis"],
+		["go to the road", "ir a la carretera"], ["farm $800", "farmear $800"], ["open TELEPORTS", "abrir TELEPORTS"],
+		["pick DEALERSHIP and GO", "elegir DEALERSHIP y GO"], ["step into the green circle", "entrar al círculo verde"], ["pick the Ninza 300", "elegir la Ninza 300"],
+		["buy the Ninza 300", "comprar la Ninza 300"], ["close with CONTINUE", "cerrar con CONTINUE"], ["open the GARAGE again", "abrir el GARAGE otra vez"],
+		["pick the new bike", "elegir la moto nueva"], ["press SPAWN with the new one", "presionar SPAWN con la nueva"],
+	],
+	B: [
+		["pick their first bike", "elegir su primera moto"], ["farm $800", "farmear $800"], ["open TELEPORTS", "abrir TELEPORTS"],
+		["pick DEALERSHIP and GO", "elegir DEALERSHIP y GO"], ["step into the green circle", "entrar al círculo verde"], ["pick the Ninza 300", "elegir la Ninza 300"],
+		["buy the Ninza 300", "comprar la Ninza 300"], ["close with BACK / CONTINUE", "cerrar con BACK / CONTINUE"], ["open the GARAGE", "abrir el GARAGE"],
+		["pick their bike", "elegir su moto"], ["press SPAWN", "presionar SPAWN"], ["enter the TUNING BAY", "entrar al TUNING BAY"],
+		["upgrade the EXHAUST for free", "mejorar el EXHAUST gratis"], ["go to the road", "ir a la carretera"],
+	],
+};
+// A step's name: the list's in this page's language, else what the game said (without its "12/14: ")
+const stepLabel = (version, k, said) => {
+	const known = STEP_NAMES[version]?.[k - 1];
+	if (known) return T(known[0], known[1]);
+	return said ? String(said).replace(/^\d+\/\d+:\s*/, "") : "";
+};
 
 /* ---------------- a session (the design of 2026-11-11) ---------------- */
 async function sessionPage(id, focusQ) {
@@ -1761,7 +1789,7 @@ async function replayView({ lines, played, id, sum }) {
 	// (2 a second), when kept (7 days)
 	let track = [], looks = [], cars = [], lib = null, view3d = null, view = "map";
 	try {
-		const [data, mod] = await Promise.all([api(`/api/sessions/${id}/track`), import("/replay3d.js?v=10")]);
+		const [data, mod] = await Promise.all([api(`/api/sessions/${id}/track`), import("/replay3d.js?v=12")]);
 		lib = mod;
 		track = mod.decodeTrack(data.track);
 		looks = mod.decodeLook(data.look);
@@ -1811,10 +1839,13 @@ async function replayView({ lines, played, id, sum }) {
 		const wi = at(windows, t);
 		const open = wi >= 0 && /^Abrió /.test(windows[wi].s) ? windows[wi].s.slice(6) : null;
 		const key = open ? windowKey[open] : null;
-		const picture = key && FRAMES.has(key) ? key : null;
+		const picture = key && FRAMES[key] ? FRAMES[key] : null;
 		$("#rframe").hidden = !picture;
-		if (picture && shownFrame !== picture) $("#rframe").innerHTML = `<img src="/frames/${picture}.jpg" alt="${esc(open)}"/>`;
-		shownFrame = picture;
+		if (picture && shownFrame !== key) {
+			$("#rframe").className = `frame${picture.full ? " full" : ""}`;
+			$("#rframe").innerHTML = `<img src="/frames/${picture.file}" alt="${esc(open)}"/>`;
+		}
+		shownFrame = picture ? key : null;
 		$("#rwin").hidden = !open || !!picture;
 		if (open && !picture) $("#rwin").innerHTML = `<b>${esc(open)} <span>${icon("x")}</span></b><i></i><i style="width:70%"></i><i style="width:45%"></i>`;
 		// a big moment: REPLAY, BUSTED, CONTINUE...
@@ -1995,6 +2026,7 @@ async function funnelsPage() {
 		const steps = Math.max(...rows.map((x) => x.total || 0), ...rows.map((x) => x.tut_step || 0), 1);
 		const stepName = {};
 		for (const x of rows) if (x.tut_step && x.step_name && !stepName[x.tut_step]) stepName[x.tut_step] = x.step_name;
+		for (let k = 1; k <= Math.max(...rows.map((x) => x.total || 0), ...rows.map((x) => x.tut_step || 0), 1); k++) stepName[k] = stepLabel(chosen.version, k, stepName[k]);
 		const done = rows.filter((x) => x.tut_done).length;
 		const playing = rows.filter(isLive).length;
 		const left = (k) => rows.filter((x) => x.ended && !x.tut_done && (x.tut_step || 0) === k);
@@ -2361,7 +2393,6 @@ $$("[data-nav]").forEach((a) => {
 });
 $("#logout").textContent = T("Sign out", "Salir");
 $("#conn").innerHTML = `<span class="dot warn"></span> ${T("Connecting…", "Conectando…")}`;
-$("#credit").innerHTML = `Xisty Analytics · ${T("by", "por")} <b>Xisty</b>`;
 $$("#lang [data-lang]").forEach((b) => {
 	b.classList.toggle("on", b.dataset.lang === LANG);
 	b.onclick = () => {

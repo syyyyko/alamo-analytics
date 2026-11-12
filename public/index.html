@@ -3,15 +3,14 @@
 <head>
 	<meta charset="utf-8" />
 	<meta name="viewport" content="width=device-width, initial-scale=1" />
-	<title>Xisty Analytics</title>
-	<meta name="author" content="Xisty" />
+	<title>Alamo Analytics</title>
 	<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='14' fill='%232a78d6'/><circle cx='16' cy='16' r='6' fill='%23fcfcfb'/></svg>" />
-	<link rel="stylesheet" href="/app.css?v=10" />
+	<link rel="stylesheet" href="/app.css?v=12" />
 </head>
 <body>
 	<div class="shell">
 		<aside class="side">
-			<a class="brand" href="#/"><b>XISTY</b><span>ANALYTICS</span><small>Night Wheels</small></a>
+			<a class="brand" href="#/"><b>ALAMO</b><span>ANALYTICS</span><small>Night Wheels</small></a>
 			<nav>
 				<a href="#/" data-nav="home"><i data-icon="bars"></i><span>Overview</span></a>
 				<a href="#/sesiones" data-nav="sesiones"><i data-icon="calendar"></i><span>Sessions</span></a>
@@ -23,16 +22,23 @@
 				<div class="lang" id="lang" role="group" aria-label="Language"><i data-icon="globe"></i><button class="small" data-lang="en">EN</button><button class="small" data-lang="es">ES</button></div>
 				<button class="ghost small" id="logout" hidden>Sign out</button>
 				<div id="conn"><span class="dot warn"></span> Connecting…</div>
-				<div class="credit" id="credit">Xisty Analytics · by <b>Xisty</b></div>
 			</div>
 		</aside>
 		<main id="app"><p class="muted pad">Loading…</p></main>
 	</div>
 	<div id="tip" class="tip" hidden></div>
 	<div id="toast" class="toast" hidden></div>
-	<!-- the windows we have a picture of (public/frames/<key>.jpg) -->
-	<script>window.NW_FRAMES = [];</script>
+	<!-- the windows we have a picture of (public/frames, captured from the game in Studio): key → file -->
+	<script>
+		window.NW_FRAMES = {
+			Garage: { file: "Garage.jpg" }, Dealership: { file: "Dealership.jpg" }, Shop: { file: "Shop.jpg" }, Quests: { file: "Quests.jpg" },
+			Teleports: { file: "Teleports.jpg" }, Equipment: { file: "Equipment.jpg" }, Daily: { file: "Daily.jpg" }, Event: { file: "Event.jpg" },
+			Tricks: { file: "Tricks.jpg" }, Settings: { file: "Settings.jpg" }, Summary: { file: "Summary.jpg" }, Radio: { file: "Radio.jpg" },
+			Gift: { file: "Gift.jpg" }, Servers: { file: "Servers.jpg" }, Records: { file: "Records.jpg" },
+			RunResult: { file: "RunResult.png", full: true },
+		};
+	</script>
 	<!-- (?v= bumped with every change: browsers keep the old files otherwise) -->
-	<script src="/app.js?v=10" type="module"></script>
+	<script src="/app.js?v=12" type="module"></script>
 </body>
 </html>

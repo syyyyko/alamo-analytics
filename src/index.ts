@@ -1181,56 +1181,109 @@ async function digestData(days: number, env: Env) {
 	};
 }
 
-const TAG_NAMES: Record<string, string> = {
-	rage: "clics de rabia", dead: "clics sin efecto", cerrar: "no podía salir de una ventana", uturn: "abrió y cerró al instante",
-	alejo: "se alejó en el tutorial", lento: "mucho tiempo en un paso", atasco: "atascado", error: "error de script", salida: "se fue tras un problema",
+// The signals' names, both languages (the digest goes in the dashboard's language: 2026-11-12, the user: "que el summary sea
+// en el lenguaje que tienes puesto")
+const TAG_NAMES: Record<string, [string, string]> = {
+	rage: ["rage clicks", "clics de rabia"], dead: ["dead clicks", "clics sin efecto"], cerrar: ["stuck in a window", "no podía salir de una ventana"],
+	uturn: ["opened and closed at once", "abrió y cerró al instante"], alejo: ["wandered off in the tutorial", "se alejó en el tutorial"],
+	lento: ["long on one step", "mucho tiempo en un paso"], atasco: ["looked stuck", "atascado"], error: ["script error", "error de script"],
+	salida: ["left after a problem", "se fue tras un problema"],
 };
+type Lang = "en" | "es";
+const langOf = (url: URL, fallback: Lang): Lang => (url.searchParams.get("lang") === "en" ? "en" : url.searchParams.get("lang") === "es" ? "es" : fallback);
 
-function digestMarkdown(d: Awaited<ReturnType<typeof digestData>>, base: string): string {
+function digestMarkdown(d: Awaited<ReturnType<typeof digestData>>, base: string, lang: Lang): string {
+	const L = (en: string, es: string) => (lang === "es" ? es : en);
+	const tag = (x: string) => (TAG_NAMES[x] ? TAG_NAMES[x][lang === "es" ? 1 : 0] : x);
+	const yes = L("yes", "sí"), no = "no";
 	const t: any = d.totals || {};
 	const pct = (a: number, b: number) => (b ? `${Math.round((100 * (a || 0)) / b)}%` : "—");
 	const mins = (s: number | null) => (s == null ? "—" : s < 60 ? `${Math.round(s)}s` : `${Math.floor(s / 60)}m ${Math.round(s % 60)}s`);
 	const table = (head: string[], rows: unknown[][]) =>
-		rows.length ? [`| ${head.join(" | ")} |`, `|${head.map(() => "---").join("|")}|`, ...rows.map((r) => `| ${r.map((c) => String(c ?? "—").replace(/\|/g, "/")).join(" | ")} |`)].join("\n") : "_(nada)_";
+		rows.length ? [`| ${head.join(" | ")} |`, `|${head.map(() => "---").join("|")}|`, ...rows.map((r) => `| ${r.map((c) => String(c ?? "—").replace(/\|/g, "/")).join(" | ")} |`)].join("\n") : L("_(none)_", "_(nada)_");
 	const out: string[] = [];
-	out.push(`# Night Wheels: analíticas de los últimos ${d.days} días`, `Generado ${d.generated} · jugando ahora: ${d.playingNow} · base de datos: ${d.dbBytes != null ? (d.dbBytes / 1048576).toFixed(1) + " MB de 500 MB" : "?"}`);
 	out.push(
-		`\n## Totales`,
-		`- ${t.sessions ?? 0} sesiones de ${t.players ?? 0} jugadores; ${t.firsts ?? 0} nuevos (${pct(t.firsts, t.sessions)}).`,
-		`- Duración media ${mins(t.avg_played)}. Terminaron el tutorial ${t.tut_done ?? 0} de ${t.firsts ?? 0} nuevos (${pct(t.tut_done, t.firsts)}).`,
-		`- Robux ${t.robux ?? 0}; dinero del juego ganado $${t.earned ?? 0}, gastado $${t.spent ?? 0}.`,
+		L(`# Night Wheels: analytics for the last ${d.days} days`, `# Night Wheels: analíticas de los últimos ${d.days} días`),
+		L(
+			`Generated ${d.generated} · playing now: ${d.playingNow} · database: ${d.dbBytes != null ? (d.dbBytes / 1048576).toFixed(1) + " MB of 500 MB" : "?"}`,
+			`Generado ${d.generated} · jugando ahora: ${d.playingNow} · base de datos: ${d.dbBytes != null ? (d.dbBytes / 1048576).toFixed(1) + " MB de 500 MB" : "?"}`,
+		),
 	);
-	out.push(`\n## Por día`, table(["día", "sesiones", "jugadores", "nuevos", "duración media"], d.daily.map((r: any) => [r.day, r.sessions, r.players, r.firsts, mins(r.avg_played)])));
-	out.push(`\n## Por qué se van (motivo más probable de cada sesión; w = regla)`, table(["w", "sesiones", "de ellos nuevos", "ejemplo"], d.exitReasons.map((r: any) => [r.w, r.n, r.firsts, r.example])));
-	out.push(`\n## Tutorial de los nuevos (sesiones terminadas, por paso en que quedaron)`);
-	out.push(table(["versión", "paso", "terminó", "sesiones", "nombre del paso", "media en el paso"], d.tutorialFunnel.map((r: any) => [r.version, r.step, r.done ? "sí" : "no", r.n, r.name, mins(r.avg_in_step)])));
-	out.push(`\n### Motivos de los que se fueron en cada paso`, table(["versión", "paso", "w", "sesiones", "ejemplo"], d.tutorialDropReasons.map((r: any) => [r.version, r.step, r.w, r.n, r.example])));
-	out.push(`\n## Señales de frustración (por qué y sobre qué)`, table(["señal", "sobre", "veces", "sesiones"], d.signals.map((r: any) => [TAG_NAMES[r.tag] || r.tag, r.target, r.n, r.sessions])));
-	out.push(`\n## Compras con dinero del juego`, table(["item", "grupo", "veces", "dinero"], d.bought.map((r: any) => [r.item, r.grp, r.n, r.cash])));
-	out.push(`\n## Quisieron comprar y no pudieron`, table(["item", "por qué", "sesiones", "intentos"], d.triedAndFailed.map((r: any) => [r.item, r.why, r.sessions, r.tries])));
-	out.push(`\n## Ventanas`, table(["ventana", "sesiones que la abrieron", "aperturas", "segundos de media"], d.windows.map((r: any) => [r.window, r.sessions, r.opens, r.avg_seconds])));
-	out.push(`\n## Dispositivos`, table(["equipo", "sesiones", "duración media", "FPS medio", "ping medio"], d.devices.map((r: any) => [r.device, r.n, mins(r.avg_played), r.fps, r.ping])));
-	out.push(`\n## Dónde se salen más (cuadros de 250 studs)`, table(["x", "z", "salidas"], d.exitHotspots.map((r: any) => [r.x, r.z, r.n])));
+	if (lang === "en") out.push(`(Texts that come from the game itself, such as exit reasons, steps and events, are in Spanish.)`);
 	out.push(
-		`\n## Sesiones para revisar (más señales)`,
-		table(["sesión", "jugador", "nuevo", "duró", "puntos", "señales", "motivo"], d.review.map((r: any) => [`${base}/#/s/${r.id}`, r.name, r.first ? "sí" : "no", mins(r.played), r.score, (r.tags || "").split(",").map((x: string) => TAG_NAMES[x] || x).join(", "), r.reason])),
+		L(`\n## Totals`, `\n## Totales`),
+		L(
+			`- ${t.sessions ?? 0} sessions from ${t.players ?? 0} players; ${t.firsts ?? 0} new (${pct(t.firsts, t.sessions)}).`,
+			`- ${t.sessions ?? 0} sesiones de ${t.players ?? 0} jugadores; ${t.firsts ?? 0} nuevos (${pct(t.firsts, t.sessions)}).`,
+		),
+		L(
+			`- Average session ${mins(t.avg_played)}. Finished the tutorial: ${t.tut_done ?? 0} of ${t.firsts ?? 0} new (${pct(t.tut_done, t.firsts)}).`,
+			`- Duración media ${mins(t.avg_played)}. Terminaron el tutorial ${t.tut_done ?? 0} de ${t.firsts ?? 0} nuevos (${pct(t.tut_done, t.firsts)}).`,
+		),
+		L(`- Robux ${t.robux ?? 0}; game cash earned $${t.earned ?? 0}, spent $${t.spent ?? 0}.`, `- Robux ${t.robux ?? 0}; dinero del juego ganado $${t.earned ?? 0}, gastado $${t.spent ?? 0}.`),
 	);
-	out.push(`\nMás detalle: GET /api/agent/session/<id>?format=md · /api/agent/player/<userId> · /api/agent/funnel`);
+	out.push(
+		L(`\n## Per day`, `\n## Por día`),
+		table(L("day,sessions,players,new,avg session", "día,sesiones,jugadores,nuevos,duración media").split(","), d.daily.map((r: any) => [r.day, r.sessions, r.players, r.firsts, mins(r.avg_played)])),
+	);
+	out.push(
+		L(`\n## Why they leave (likeliest reason per session; w = rule)`, `\n## Por qué se van (motivo más probable de cada sesión; w = regla)`),
+		table(L("w,sessions,of them new,example", "w,sesiones,de ellos nuevos,ejemplo").split(","), d.exitReasons.map((r: any) => [r.w, r.n, r.firsts, r.example])),
+	);
+	out.push(L(`\n## New players' tutorial (ended sessions, by the step they stopped on)`, `\n## Tutorial de los nuevos (sesiones terminadas, por paso en que quedaron)`));
+	out.push(
+		table(
+			L("version,step,finished,sessions,step name,avg time on step", "versión,paso,terminó,sesiones,nombre del paso,media en el paso").split(","),
+			d.tutorialFunnel.map((r: any) => [r.version, r.step, r.done ? yes : no, r.n, r.name, mins(r.avg_in_step)]),
+		),
+	);
+	out.push(
+		L(`\n### Why players left on each step`, `\n### Motivos de los que se fueron en cada paso`),
+		table(L("version,step,w,sessions,example", "versión,paso,w,sesiones,ejemplo").split(","), d.tutorialDropReasons.map((r: any) => [r.version, r.step, r.w, r.n, r.example])),
+	);
+	out.push(
+		L(`\n## Frustration signals (what and where)`, `\n## Señales de frustración (por qué y sobre qué)`),
+		table(L("signal,about,times,sessions", "señal,sobre,veces,sesiones").split(","), d.signals.map((r: any) => [tag(r.tag), r.target, r.n, r.sessions])),
+	);
+	out.push(L(`\n## Purchases with game cash`, `\n## Compras con dinero del juego`), table(L("item,group,times,cash", "item,grupo,veces,dinero").split(","), d.bought.map((r: any) => [r.item, r.grp, r.n, r.cash])));
+	out.push(
+		L(`\n## Wanted to buy and couldn't`, `\n## Quisieron comprar y no pudieron`),
+		table(L("item,why,sessions,tries", "item,por qué,sesiones,intentos").split(","), d.triedAndFailed.map((r: any) => [r.item, r.why, r.sessions, r.tries])),
+	);
+	out.push(
+		L(`\n## Windows`, `\n## Ventanas`),
+		table(L("window,sessions that opened it,opens,avg seconds", "ventana,sesiones que la abrieron,aperturas,segundos de media").split(","), d.windows.map((r: any) => [r.window, r.sessions, r.opens, r.avg_seconds])),
+	);
+	out.push(
+		L(`\n## Devices`, `\n## Dispositivos`),
+		table(L("device,sessions,avg session,avg FPS,avg ping", "equipo,sesiones,duración media,FPS medio,ping medio").split(","), d.devices.map((r: any) => [r.device, r.n, mins(r.avg_played), r.fps, r.ping])),
+	);
+	out.push(L(`\n## Where they leave most (250-stud squares)`, `\n## Dónde se salen más (cuadros de 250 studs)`), table(L("x,z,exits", "x,z,salidas").split(","), d.exitHotspots.map((r: any) => [r.x, r.z, r.n])));
+	out.push(
+		L(`\n## Sessions to review (most signals)`, `\n## Sesiones para revisar (más señales)`),
+		table(
+			L("session,player,new,length,score,signals,reason", "sesión,jugador,nuevo,duró,puntos,señales,motivo").split(","),
+			d.review.map((r: any) => [`${base}/#/s/${r.id}`, r.name, r.first ? yes : no, mins(r.played), r.score, (r.tags || "").split(",").map(tag).join(", "), r.reason]),
+		),
+	);
+	out.push(L(`\nMore detail: GET /api/agent/session/<id>?format=md · /api/agent/player/<userId> · /api/agent/funnel`, `\nMás detalle: GET /api/agent/session/<id>?format=md · /api/agent/player/<userId> · /api/agent/funnel`));
 	return out.join("\n");
 }
 
-function sessionMarkdown(r: any): string {
+function sessionMarkdown(r: any, lang: Lang): string {
+	const L = (en: string, es: string) => (lang === "es" ? es : en);
 	const s = r.session, sum = r.summary;
 	const quiet = new Set(["tecla", "mando", "clic", "toque", "estado"]);
 	const out = [
-		`# Sesión ${s.id} · ${s.display} (@${s.name}, UserId ${s.user_id})`,
-		`Empezó ${new Date(s.started_at * 1000).toISOString()} · ${s.first ? "primera vez" : s.first === 0 ? "volvió" : "datos no cargaron"} · ${s.device ?? "?"} · ${s.ended ? `duró ${s.played}s` : "sin cerrar"}`,
+		L(`# Session ${s.id} · ${s.display} (@${s.name}, UserId ${s.user_id})`, `# Sesión ${s.id} · ${s.display} (@${s.name}, UserId ${s.user_id})`),
+		L(
+			`Started ${new Date(s.started_at * 1000).toISOString()} · ${s.first ? "first time" : s.first === 0 ? "returning" : "data didn't load"} · ${s.device ?? "?"} · ${s.ended ? `lasted ${s.played}s` : "no end"}`,
+			`Empezó ${new Date(s.started_at * 1000).toISOString()} · ${s.first ? "primera vez" : s.first === 0 ? "volvió" : "datos no cargaron"} · ${s.device ?? "?"} · ${s.ended ? `duró ${s.played}s` : "sin cerrar"}`,
+		),
 	];
-	if (sum) {
-		out.push(`\n## Resumen (datos del juego)`, "```json", JSON.stringify(sum), "```");
-	}
+	if (sum) out.push(L(`\n## Summary (the game's data)`, `\n## Resumen (datos del juego)`), "```json", JSON.stringify(sum), "```");
 	const lines = r.lines as any[];
-	out.push(`\n## Línea de tiempo (sin teclas/clics/estado; ${lines.length} líneas en total)`);
+	out.push(L(`\n## Timeline (no keys/clicks/status; ${lines.length} lines in all)`, `\n## Línea de tiempo (sin teclas/clics/estado; ${lines.length} líneas en total)`));
 	for (const l of lines) {
 		if (quiet.has(l.k)) continue;
 		const at = `${Math.floor(l.t / 60)}:${String(Math.floor(l.t % 60)).padStart(2, "0")}`;
@@ -1240,7 +1293,7 @@ function sessionMarkdown(r: any): string {
 	if (clicks.length) {
 		const counts: Record<string, number> = {};
 		for (const l of clicks) counts[l.s] = (counts[l.s] || 0) + (l.c || 1);
-		out.push(`\n## Clics más repetidos`, ...Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 12).map(([k, n]) => `- ${n}× ${k}`));
+		out.push(L(`\n## Most repeated clicks`, `\n## Clics más repetidos`), ...Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 12).map(([k, n]) => `- ${n}× ${k}`));
 	}
 	return out.join("\n");
 }
@@ -1259,13 +1312,13 @@ async function agentRoute(path: string, url: URL, env: Env): Promise<Response> {
 	if (path.endsWith("/digest")) {
 		const days = Math.min(Math.max(Number(url.searchParams.get("days") || "7"), 0.04), 90);
 		const data = await digestData(days, env);
-		return asJson ? json(data) : markdown(digestMarkdown(data, base));
+		return asJson ? json(data) : markdown(digestMarkdown(data, base, langOf(url, "es")));
 	}
 	const one = path.match(/\/session\/([a-z0-9]{6,40})$/);
 	if (one) {
 		const res = await sessionDetail(one[1], env);
 		if (asJson || !res.ok) return res;
-		return markdown(sessionMarkdown(await res.json()));
+		return markdown(sessionMarkdown(await res.json(), langOf(url, "es")));
 	}
 	const who = path.match(/\/player\/(\d{1,15})$/);
 	if (who) return await player(Number(who[1]), env);
