@@ -37,6 +37,7 @@ const ICONS = {
 	calendar: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>',
 	pin: '<path d="M12 22s7-6.5 7-12a7 7 0 0 0-14 0c0 5.5 7 12 7 12z"/><circle cx="12" cy="10" r="2.5"/>',
 	funnel: '<path d="M3 4h18l-7 8v7l-4 2v-9z"/>',
+	split: '<path d="M12 21v-9M12 12L5 5M12 12l7-7M5 10V5h5M19 10V5h-5"/>',
 	clock: '<circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2M9 2h6"/>',
 	list: '<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
 	wallet: '<rect x="3" y="6" width="18" height="14" rx="2"/><path d="M16 13h2M3 10h18"/>',
@@ -1569,6 +1570,7 @@ async function sessionPage(id, focusQ) {
 					<span class="chip static">${icon("monitor")} ${esc(deviceName(s.device))}</span>
 					${tut ? `<span class="chip static">${icon("book")} Tutorial ${esc(tut.version || "")}</span>` : ""}
 					<span class="chip static">${icon("layers")} ${T("Version", "Versión")} ${s.place_version ?? "?"}</span>
+					${abChip(s.ab)}
 					${s.studio ? `<span class="chip static">Studio</span>` : ""}</div>
 			</div>
 			<div class="sep"></div>
@@ -2081,6 +2083,265 @@ async function funnelsPage() {
 	refreshTimer = setInterval(() => load().catch(() => {}), 15000);
 }
 
+/* ---------------- A/B tests (2026-11-12): Roblox's experiments, live from our sessions ----------------
+   Roblox (Creator Hub) gives each player a variant through Config keys and reports days later; the game sends what each
+   player got with every send, so this shows the same split as sessions come. A card per experiment: rows are metrics,
+   columns variants (the first is the control); the better one in a row is only marked once every variant has the
+   players the server asks for (min), and each other variant shows how far it is from the control. */
+const AB_DAYS = [1, 3, 7, 14, 30];
+const AB_REFRESH = 30; // seconds between asks while the page is in view (each ask reads every session in the period)
+const AB_IDLE = 30; // minutes with no mouse or keys before the page stops asking (one left open all day would read all day)
+let lastActive = Date.now();
+for (const name of ["pointerdown", "pointermove", "keydown", "wheel", "touchstart"]) addEventListener(name, () => (lastActive = Date.now()), { passive: true });
+// What each experiment the game reports is: its variants and the metric that decides it (its row in bold)
+const AB_TESTS = {
+	CrashPanel: {
+		goal: "avg_played",
+		goalText: T("Goal: playtime (average session)", "Meta: tiempo de juego (duración media)"),
+		variants: {
+			On: T("the crash summary and the eyelids, as before", "el resumen de choque y los párpados, como antes"),
+			Off: T(
+				"no summary nor eyelids: you keep riding, the streak ends and the offer shows below",
+				"sin resumen ni párpados: sigue manejando, pierde la racha y abajo sale la oferta",
+			),
+		},
+	},
+	StreakOffer: {
+		goal: "robux_per_player",
+		goalText: T("Goal: Robux (per player, and the streak's Robux, purchases and offers taken)", "Meta: Robux (por jugador, y los Robux, compras y ofertas aceptadas de la racha)"),
+		variants: { Recover: T("keep the streak going (revive)", "seguir con la racha (revivir)"), Double: T("double the lost streak's points", "duplicar los puntos de la racha perdida") },
+	},
+	TutorialVersion: {
+		goal: "tut_done_share",
+		goalText: T("Goal: tutorial completion (new players)", "Meta: completar el tutorial (jugadores nuevos)"),
+		variants: { A: T("dealership first", "primero el concesionario"), B: T("road first", "primero la carretera") },
+	},
+	TutorialShade: {
+		goal: "tut_done_share",
+		goalText: T("Goal: tutorial completion (new players)", "Meta: completar el tutorial (jugadores nuevos)"),
+		variants: { On: T("dark frames round what to press", "marcos oscuros alrededor de lo que hay que tocar"), Off: T("no dark frames", "sin marcos oscuros") },
+	},
+};
+const nf1 = new Intl.NumberFormat(LOCALE, { maximumFractionDigits: 1 });
+const dec = (n) => (n == null ? "—" : nf1.format(n));
+const abShare = (x) => (x == null ? "—" : Math.round(100 * x) + "%");
+// The table's rows. rate: the number compared between variants (none: a count, which only says how big each side is);
+// better: 1 the higher wins, 0 compared but neither way is better (crashes: riding more is crashing more). only: rows for
+// the tutorial experiments or the others (the streak's)
+const AB_ROWS = [
+	{ id: "players", name: T("Players", "Jugadores"), show: (v) => int(v.players), sub: (v) => T(`${int(v.sessions)} sessions`, `${int(v.sessions)} sesiones`) },
+	{ id: "new_players", name: T("New players", "Jugadores nuevos"), show: (v) => int(v.new_players) },
+	{ id: "avg_played", name: T("Average session", "Duración media"), show: (v) => dur(v.avg_played), rate: (v) => v.avg_played, better: 1 },
+	{ id: "median_played", name: T("Median session", "Duración mediana"), show: (v) => dur(v.median_played), rate: (v) => v.median_played, better: 1 },
+	{
+		id: "long_share",
+		name: T("Sessions of 5 min or more", "Sesiones de 5 min o más"),
+		show: (v) => abShare(v.long_share),
+		sub: (v) => T(`${int(v.long_sessions)} of ${int(v.ended)}`, `${int(v.long_sessions)} de ${int(v.ended)}`),
+		rate: (v) => v.long_share,
+		better: 1,
+	},
+	{
+		id: "returning_share",
+		name: T("Came back another day", "Volvieron otro día"),
+		show: (v) => abShare(v.returning_share),
+		sub: (v) => T(`${int(v.returning)} players`, `${int(v.returning)} jugadores`),
+		rate: (v) => v.returning_share,
+		better: 1,
+	},
+	{
+		id: "robux_per_player",
+		name: T("Robux per player", "Robux por jugador"),
+		show: (v) => (v.robux_per_player == null ? "—" : "R$ " + dec(v.robux_per_player)),
+		sub: (v) => `R$ ${int(v.robux)} total`,
+		rate: (v) => v.robux_per_player,
+		better: 1,
+	},
+	{
+		id: "payer_share",
+		name: T("Players who paid", "Jugadores que pagaron"),
+		show: (v) => abShare(v.payer_share),
+		sub: (v) => T(`${int(v.payers)} players`, `${int(v.payers)} jugadores`),
+		rate: (v) => v.payer_share,
+		better: 1,
+	},
+	{
+		id: "tut_done_share",
+		only: "tutorial",
+		name: T("Finished the tutorial (new players)", "Terminaron el tutorial (nuevos)"),
+		show: (v) => abShare(v.tut_done_share),
+		sub: (v) => T(`${int(v.new_done)} of ${int(v.new_players)}`, `${int(v.new_done)} de ${int(v.new_players)}`),
+		rate: (v) => v.tut_done_share,
+		better: 1,
+	},
+	{ id: "crashes_per_session", name: T("Crashes per session", "Choques por sesión"), show: (v) => dec(v.crashes_per_session), rate: (v) => v.crashes_per_session, better: 0 },
+	{ id: "streak_offers", only: "streak", name: T("Streak offers shown", "Ofertas de racha mostradas"), show: (v) => int(v.streak.offers) },
+	{
+		id: "streak_taken",
+		only: "streak",
+		name: T("Offers taken", "Ofertas aceptadas"),
+		show: (v) => int(v.streak.taken),
+		sub: (v) => T(`${pct(v.streak.taken, v.streak.offers)} of offers`, `${pct(v.streak.taken, v.streak.offers)} de las ofertas`),
+		rate: (v) => (v.streak.offers ? v.streak.taken / v.streak.offers : null),
+		better: 1,
+	},
+	{
+		id: "streak_bought",
+		only: "streak",
+		name: T("Bought with Robux", "Compradas con Robux"),
+		show: (v) => int(v.streak.bought),
+		sub: (v) => T(`${pct(v.streak.bought, v.streak.offers)} of offers`, `${pct(v.streak.bought, v.streak.offers)} de las ofertas`),
+		rate: (v) => (v.streak.offers ? v.streak.bought / v.streak.offers : null),
+		better: 1,
+	},
+	{
+		id: "streak_robux",
+		only: "streak",
+		name: T("Streak Robux", "Robux de la racha"),
+		show: (v) => "R$ " + int(v.streak.robux),
+		sub: (v) => (v.players ? T(`R$ ${dec(v.streak.robux / v.players)} per player`, `R$ ${dec(v.streak.robux / v.players)} por jugador`) : ""),
+		rate: (v) => (v.players ? v.streak.robux / v.players : null),
+		better: 1,
+	},
+];
+function abCard(x, min) {
+	const known = AB_TESTS[x.key];
+	const vs = x.variants;
+	const enough = vs.length > 1 && vs.every((v) => v.players >= min);
+	const tutorial = x.key.startsWith("Tutorial");
+	const head = `<div class="cardhead"><h2>${icon("split")} ${esc(x.key)}</h2>${enough ? "" : `<span class="tag right">${T("not enough players yet", "aún pocos jugadores")}</span>`}</div>
+		<ul class="abvars">${vs
+			.map(
+				(v, i) =>
+					`<li><b>${esc(v.variant)}</b>${i === 0 ? ` <span class="muted">(${T("control", "control")})</span>` : ""} · ${esc(known?.variants[v.variant] || T("no description yet", "sin descripción aún"))}</li>`,
+			)
+			.join("")}</ul>
+		${known ? `<p class="abgoal"><b>${known.goalText}</b></p>` : ""}`;
+	if (!vs.some((v) => v.sessions > 0))
+		return `<div class="card abtest">${head}<div class="empty">${T("No sessions with this experiment in this period yet.", "Aún no hay sesiones con este experimento en este periodo.")}</div></div>`;
+	const rows = AB_ROWS.filter((r) => !r.only || (r.only === "tutorial") === tutorial);
+	const body = rows
+		.map((r) => {
+			const rates = vs.map((v) => (r.rate ? r.rate(v) : null));
+			// (the best only when it's alone at the top, by at least half a percent: no "+0%" marked better)
+			let best = -1;
+			if (enough && r.better) {
+				const have = rates.filter((n) => n != null).sort((a, b) => b - a);
+				if (have.length > 1 && have[0] > 0 && (have[0] - have[1]) / Math.abs(have[1] || have[0]) >= 0.005) best = rates.indexOf(have[0]);
+			}
+			const goal = known?.goal === r.id;
+			const cells = vs.map((v, i) => {
+				let diff = "";
+				if (i > 0 && rates[0] && rates[i] != null) {
+					const d = Math.round((100 * (rates[i] - rates[0])) / rates[0]);
+					const tone = !enough || !r.better || d === 0 ? "flat" : d > 0 ? "good" : "bad";
+					diff = `<span class="diff ${tone}">${d < 0 ? "−" : "+"}${Math.abs(d)}%</span>`;
+				}
+				const value = r.show(v);
+				const sub = r.sub ? r.sub(v) : "";
+				return `<td class="num${i === best ? " win" : ""}">${goal || i === best ? `<b>${value}</b>` : value}${diff}${sub ? `<span class="sub">${sub}</span>` : ""}</td>`;
+			});
+			return `<tr${goal ? ` class="goal"` : ""}><td>${goal ? `<b>${r.name}</b>` : r.name}</td>${cells.join("")}</tr>`;
+		})
+		.join("");
+	const note = enough
+		? ""
+		: `<p class="muted abnote">${T(
+				`The better side is marked once every variant has ${min} players (now ${vs.map((v) => `${esc(v.variant)} ${int(v.players)}`).join(", ")}).`,
+				`El mejor se marca cuando cada variante tenga ${min} jugadores (ahora ${vs.map((v) => `${esc(v.variant)} ${int(v.players)}`).join(", ")}).`,
+			)}</p>`;
+	return `<div class="card abtest">${head}
+		<div class="scroll"><table class="abt"><tr><th>${T("Metric", "Métrica")}</th>${vs.map((v, i) => `<th class="num">${esc(v.variant)}${i === 0 ? ` <small>${T("control", "control")}</small>` : ""}</th>`).join("")}</tr>${body}</table></div>
+		${note}</div>`;
+}
+// The A/B variants a session had, one chip (sessions.ab; none before 2026-11-12)
+function abChip(ab) {
+	let list = {};
+	try {
+		list = JSON.parse(ab || "{}") || {};
+	} catch {}
+	const text = Object.entries(list)
+		.map(([key, variant]) => `${key} ${variant}`)
+		.join(" · ");
+	return text ? `<span class="chip static" title="${T("A/B test variants", "Variantes de las pruebas A/B")}">${icon("split")} ${esc(text)}</span>` : "";
+}
+async function abPage() {
+	let days = AB_DAYS.includes(prefs.abDays) ? prefs.abDays : 7;
+	app.innerHTML = `<div class="stack">
+		<div class="crumbs"><b>${T("A/B tests", "Pruebas A/B")}</b></div>
+		<div class="card"><div class="filters" style="margin:0">
+			<label>${T("Period", "Periodo")}</label>
+			<select id="abdays">${AB_DAYS.map((d) => `<option value="${d}" ${d === days ? "selected" : ""}>${d === 1 ? T("Last 24 h", "Últimas 24 h") : T(`Last ${d} days`, `Últimos ${d} días`)}</option>`).join("")}</select>
+			<label><input type="checkbox" id="studio" ${state.studio ? "checked" : ""}/> Studio</label>
+			<span class="livepill" style="margin-left:auto" title="${T(
+				"Every update reads each session in the period: the more sessions, the less often it updates (D1's free plan reads 5M rows a day).",
+				"Cada actualización lee todas las sesiones del periodo: cuantas más hay, menos seguido se actualiza (el plan gratis de D1 lee 5M filas al día).",
+			)}"><span class="dot good" id="abdot"></span> ${T("Live", "En vivo")} · <span id="abago"></span></span></div></div>
+		<div class="banner ok">${icon("info")}<div><b>${T("Roblox's experiment, live", "El experimento de Roblox, en vivo")}</b>
+			<span>${T(
+				"Roblox's own experiment (Creator Hub) assigns the variants through Config keys and reports days later; this page shows the same split live from our sessions.",
+				"El experimento de Roblox (Creator Hub) reparte las variantes con las Config keys y da sus resultados días después; esta página muestra el mismo reparto en vivo con nuestras sesiones.",
+			)}</span></div></div>
+		<div class="grid cols-2" id="abcards"><p class="muted">${T("Loading…", "Cargando…")}</p></div>
+	</div>`;
+	let updated = 0, next = 0, every = AB_REFRESH, busy = false, failed = false, seq = 0;
+	const idle = () => Date.now() - lastActive > AB_IDLE * 60000;
+	const tick = () => {
+		const el = $("#abago");
+		if (!el) return clearInterval(refreshTimer); // (the page was left, or the login showed)
+		const s = Math.max(0, Math.round((Date.now() - updated) / 1000));
+		const ago = s < 120 ? T(`updated ${s} s ago`, `actualizado hace ${s} s`) : T(`updated ${Math.floor(s / 60)} min ago`, `actualizado hace ${Math.floor(s / 60)} min`);
+		el.textContent = !updated
+			? T("loading…", "cargando…")
+			: failed
+				? T("couldn't update, retrying", "no se pudo actualizar, reintentando")
+				: idle()
+					? `${ago} · ${T("paused: nobody at the page", "en pausa: nadie en la página")}`
+					: every > AB_REFRESH
+						? `${ago} · ${T(`every ${dur(every)}`, `cada ${dur(every)}`)}`
+						: ago;
+		$("#abdot")?.setAttribute("class", `dot ${failed || idle() ? "warn" : "good"}`);
+	};
+	async function load(first = false) {
+		const mine = ++seq;
+		busy = true;
+		next = Date.now() + AB_REFRESH * 1000;
+		try {
+			const r = await api("/api/ab?" + qs({ days, studio: state.studio ? 1 : "" }));
+			if (mine !== seq || !$("#abcards")) return; // (a newer ask, or the page left)
+			// (age: how old the server's answer is; every: how long it keeps one for this period, longer the more sessions
+			// it has, so asking before that only gets the same numbers)
+			updated = Date.now() - (r.age || 0) * 1000;
+			every = r.every || AB_REFRESH;
+			next = Date.now() + Math.max(AB_REFRESH, every - (r.age || 0) + 1) * 1000;
+			failed = false;
+			$("#abcards").innerHTML = r.experiments.map((x) => abCard(x, r.min)).join("");
+		} catch (err) {
+			if (first) throw err;
+			failed = true;
+		} finally {
+			if (mine === seq) busy = false;
+			tick();
+		}
+	}
+	$("#abdays").onchange = (e) => {
+		days = prefs.abDays = Number(e.target.value);
+		savePrefs({ abDays: days });
+		load();
+	};
+	$("#studio").onchange = (e) => {
+		state.studio = e.target.checked;
+		savePrefs();
+		load();
+	};
+	await load(true);
+	// (every second the "updated" clock; the numbers when they're due, only while the tab is in view and someone's at it)
+	refreshTimer = setInterval(() => {
+		tick();
+		if (!busy && !document.hidden && !idle() && Date.now() >= next) load();
+	}, 1000);
+}
+
 function detailHtml(sum) {
 	const list = (rows) => (rows.length ? `<ul class="plain">${rows.map((r) => `<li>${r}</li>`).join("")}</ul>` : `<div class="empty">${T("Nothing.", "Nada.")}</div>`);
 	const windows = Object.values(sum.windows || {}).sort((a, b) => b.seconds - a.seconds);
@@ -2386,7 +2647,7 @@ async function archivePage() {
 
 /* ---------------- the frame: sidebar words, language, sign out ---------------- */
 $$("[data-icon]").forEach((el) => (el.outerHTML = icon(el.dataset.icon)));
-const NAV = { home: ["Overview", "Resumen"], sesiones: ["Sessions", "Sesiones"], mapa: ["Points map", "Mapa de puntos"], funnels: ["Funnels", "Funnels"], versiones: ["Versions", "Versiones"] };
+const NAV = { home: ["Overview", "Resumen"], sesiones: ["Sessions", "Sesiones"], mapa: ["Points map", "Mapa de puntos"], funnels: ["Funnels", "Funnels"], ab: ["A/B tests", "Pruebas A/B"], versiones: ["Versions", "Versiones"] };
 $$("[data-nav]").forEach((a) => {
 	const words = NAV[a.dataset.nav];
 	if (words) a.querySelector("span").textContent = T(...words);
@@ -2415,11 +2676,13 @@ async function route() {
 		? "mapa"
 		: path.startsWith("/funnels")
 			? "funnels"
-			: /^\/(versiones|archivo)/.test(path)
-				? "versiones"
-				: /^\/(sesiones|s\/|p\/)/.test(path)
-					? "sesiones"
-					: "home";
+			: path === "/ab"
+				? "ab"
+				: /^\/(versiones|archivo)/.test(path)
+					? "versiones"
+					: /^\/(sesiones|s\/|p\/)/.test(path)
+						? "sesiones"
+						: "home";
 	$$("[data-nav]").forEach((a) => a.classList.toggle("on", a.dataset.nav === section));
 	hideTip();
 	clearInterval(refreshTimer);
@@ -2439,6 +2702,7 @@ async function route() {
 		else if (path === "/mapa") await mapPage();
 		else if (path === "/sesiones") await sessionsPage(params.get("q"), params.get("v"));
 		else if (path === "/funnels") await funnelsPage();
+		else if (path === "/ab") await abPage();
 		else if (path === "/versiones") await versionsPage();
 		else if (path === "/archivo") await archivePage();
 		else await home();

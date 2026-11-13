@@ -5,13 +5,15 @@
 	What a game server sends (gzip JSON, one request for all its players with something new; v 2, 2026-11-12: a session
 	goes once, when the player leaves, or every 20 minutes for a long one; v 1 sent every minute):
 	{ v: 1 | 2, server, place, version, studio, private, sent,
-	  sessions: [ { id, user, name, display, start, seq, meta?: { first, device, loaded },
+	  sessions: [ { id, user, name, display, start, seq, meta?: { first, device, loaded, tut?, ab? },
 	                lines: [ { q, t, k, s, c, p?: [x, y, z], m?, v?, f? } | { q, c } ],
 	                track?, look?, near?: base64 of the replay's samples (the game's binary formats),
 	                end?: { ...summary } } ] }
 	A line: q its number in the session, t seconds into it, k kind, s text, c times in a row, p where, m cash, v mph,
 	f FPS; a signal (k 'señal': something that looks like the player struggling) also g its tag, w its weight, o what
 	it was about. { q, c } alone: line q happened c times by now (it had already been sent).
+	meta.tut: { v, s } the tutorial's version and step now; meta.ab (2026-11-12): { experiment key: variant }, the Roblox
+	experiments' variants this player got; end.streak: { offers, taken, bought, robux } the keep-the-streak offer.
 */
 
 export interface Env {
@@ -376,6 +378,21 @@ function bool(value: unknown): number | null {
 	return typeof value === "boolean" ? (value ? 1 : 0) : null;
 }
 
+// The A/B variants a player got (meta.ab: Roblox experiment Config key → variant) as the JSON kept in sessions.ab, or null.
+// Only keys of [A-Za-z0-9_] up to 24 and text values up to 16 are kept (the rest dropped), AB_MAX_KEYS at most.
+function abOf(value: unknown): string | null {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+	const out: Record<string, string> = {};
+	let n = 0;
+	for (const [key, variant] of Object.entries(value)) {
+		if (n >= AB_MAX_KEYS) break;
+		if (!/^[A-Za-z0-9_]{1,24}$/.test(key) || typeof variant !== "string" || !/^[^\x00-\x1f\x7f]{1,16}$/.test(variant)) continue;
+		out[key] = variant;
+		n += 1;
+	}
+	return n ? JSON.stringify(out) : null;
+}
+
 async function ingest(req: Request, env: Env): Promise<Response> {
 	const key = req.headers.get("x-key") || "";
 	if (!env.INGEST_KEY || !same(key, env.INGEST_KEY)) return json({ error: "key" }, 401);
@@ -473,9 +490,9 @@ async function ingest(req: Request, env: Env): Promise<Response> {
 				.prepare(
 					`INSERT INTO sessions (id, user_id, name, display, server_id, place_version, studio, private, started_at, last_at, first, device,
 					   tut_version, tut_step, tut_done, ended, played, reason, reason_w, earned, spent, robux, level, summary,
-					   rseq, score, tags, top_text, pts, track, look, near)
+					   rseq, score, tags, top_text, pts, track, look, near, ab)
 					 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24,
-					   ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32)
+					   ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33)
 					 ON CONFLICT(id) DO UPDATE SET
 					   last_at = MAX(sessions.last_at, excluded.last_at),
 					   first = COALESCE(excluded.first, sessions.first),
@@ -483,6 +500,7 @@ async function ingest(req: Request, env: Env): Promise<Response> {
 					   tut_version = CASE WHEN excluded.ended = 1 OR sessions.ended = 0 THEN COALESCE(excluded.tut_version, sessions.tut_version) ELSE sessions.tut_version END,
 					   tut_step = CASE WHEN excluded.ended = 1 OR sessions.ended = 0 THEN COALESCE(excluded.tut_step, sessions.tut_step) ELSE sessions.tut_step END,
 					   tut_done = CASE WHEN excluded.ended = 1 THEN excluded.tut_done ELSE sessions.tut_done END,
+					   ab = CASE WHEN excluded.ended = 1 OR sessions.ended = 0 THEN COALESCE(excluded.ab, sessions.ab) ELSE sessions.ab END,
 					   ended = MAX(sessions.ended, excluded.ended),
 					   played = COALESCE(excluded.played, sessions.played),
 					   reason = COALESCE(excluded.reason, sessions.reason),
@@ -506,7 +524,7 @@ async function ingest(req: Request, env: Env): Promise<Response> {
 					end ? JSON.stringify(end).slice(0, 200000) : null,
 					Math.max(seq, old?.rseq ?? 0), signals.reduce((a, p) => a + (p[8] ?? 0), 0) || null,
 					signals.length ? [...new Set(signals.map((p) => p[7]))].join(",") : null, heaviest ? heaviest[3] : null,
-					pts.length ? JSON.stringify(pts) : null, blobs.track, blobs.look, blobs.near,
+					pts.length ? JSON.stringify(pts) : null, blobs.track, blobs.look, blobs.near, abOf(meta.ab),
 				),
 		);
 		sessions += 1;
@@ -570,7 +588,7 @@ const TAGS_OF = (s: string) =>
 	`COALESCE(${s}.tags, (SELECT GROUP_CONCAT(DISTINCT op.tag) FROM points op WHERE op.session_id = ${s}.id AND op.tag IS NOT NULL))`;
 // Every sessions column but the heavy ones (points JSON, replay samples)
 const SESSION_COLS = `id, user_id, name, display, server_id, place_version, studio, private, started_at, last_at, ended, first, device,
-	played, reason, reason_w, earned, spent, robux, level, tut_version, tut_step, tut_done, summary, reviewed, packed, score, tags, top_text`;
+	played, reason, reason_w, earned, spent, robux, level, tut_version, tut_step, tut_done, summary, reviewed, packed, score, tags, top_text, ab`;
 
 /* ---------- reading ---------- */
 async function sessionList(url: URL, env: Env): Promise<Response> {
@@ -807,6 +825,241 @@ async function funnel(url: URL, env: Env): Promise<Response> {
 		.bind(Date.now() / 1000 - days * 86400)
 		.all();
 	return json({ now: Date.now() / 1000, live: LIVE_SECONDS, sessions: results });
+}
+
+/* ---------- A/B tests (2026-11-12): Roblox's experiments, live ----------
+   Roblox's own experiment (Creator Hub) gives each player a variant through Config keys and reports days later. The game
+   sends what each player got (meta.ab) with every send, kept in sessions.ab, so the split shows here as sessions come.
+   Sessions from before have no ab: their tutorial version (tut_version, "" = A) and shade (summary.tutorial.shade) stand
+   in for the two tutorial experiments.
+   What it costs (measured on the local D1): one plain SELECT of the window reads ~1 row a session; summing it all in SQL
+   (json_each, groups, a window function for the median) read 43 times that. So one compact SELECT of the window (by the
+   start index, no chunks), summed here. An answer is kept AB_MIN_SECONDS, longer the more sessions it read, so the page
+   (asking every 30 s) reads at most AB_READS_AN_HOUR rows an hour it's open: D1's free plan reads 5M rows a day. */
+const AB_MAX_KEYS = 12; // a session's experiments kept at most (the game sends ~8)
+const AB_MAX_DAYS = 30;
+const AB_MIN_PLAYERS = 30; // players each variant needs before the page calls one better
+const AB_MIN_SECONDS = 25; // an answer is worked out again after this at the soonest
+const AB_READS_AN_HOUR = 250_000; // rows the page may read an hour it's open (5% of the free plan's day)
+// The experiments the page knows, in its order, each with its variants control first (any other key the game sends goes after)
+const AB_KNOWN: Record<string, string[]> = {
+	CrashPanel: ["On", "Off"],
+	StreakOffer: ["Recover", "Double"],
+	TutorialVersion: ["A", "B"],
+	TutorialShade: ["On", "Off"],
+};
+
+// The window's sessions, a compact row each (D1's raw arrays): [user, first, ended, played, robux, tut_done, day, ab,
+// tutorial version, shade, crashes, streak offers, taken, bought, robux]. ?1: the window's start
+function abSql(studio: boolean): string {
+	return `SELECT user_id, first, ended, played, robux, tut_done, CAST(started_at / 86400 AS INT), ab,
+		  CASE WHEN tut_version = '' THEN 'A' ELSE tut_version END, json_extract(summary, '$.tutorial.shade'), json_extract(summary, '$.crashes'),
+		  json_extract(summary, '$.streak.offers'), json_extract(summary, '$.streak.taken'), json_extract(summary, '$.streak.bought'),
+		  json_extract(summary, '$.streak.robux')
+		FROM sessions WHERE started_at >= ?1 ${studio ? "" : "AND studio = 0"}`;
+}
+
+type AbSums = { sessions: number; ended: number; played: number[]; long: number; robux: number; crashes: number; offers: number; taken: number; bought: number; streak: number };
+type AbUser = { day: number; back: boolean; isNew: boolean; did: boolean; robux: number };
+type AbCounts = { players: number; isNew: number; newDone: number; back: number; payers: number };
+const abSums = (): AbSums => ({ sessions: 0, ended: 0, played: [], long: 0, robux: 0, crashes: 0, offers: 0, taken: 0, bought: 0, streak: 0 });
+const abCounts = (): AbCounts => ({ players: 0, isNew: 0, newDone: 0, back: 0, payers: 0 });
+// The k-th smallest of a list (from 0), moving it around but not sorting it all: the medians took more CPU sorted
+function nth(xs: Float64Array, k: number): number {
+	let lo = 0, hi = xs.length - 1;
+	while (lo < hi) {
+		const pivot = xs[(lo + hi) >> 1];
+		let i = lo, j = hi;
+		while (i <= j) {
+			while (xs[i] < pivot) i++;
+			while (xs[j] > pivot) j--;
+			if (i <= j) {
+				const t = xs[i];
+				(xs[i] = xs[j]), (xs[j] = t), i++, j--;
+			}
+		}
+		if (k <= j) hi = j;
+		else if (k >= i) lo = i;
+		else return xs[k];
+	}
+	return xs[k];
+}
+function abCount(c: AbCounts, u: AbUser) {
+	c.players += 1;
+	if (u.isNew) (c.isNew += 1), u.did && (c.newDone += 1);
+	if (u.back) c.back += 1;
+	if (u.robux > 0) c.payers += 1;
+}
+
+// The rows summed per experiment and variant. Sessions are summed per combo first (the same ab, tutorial version and
+// shade: a handful, Roblox gives a player the same variants every time), then each combo is added to each of its
+// experiments' variants, so the work a session takes doesn't grow with the experiments (the free plan's CPU time is
+// 10 ms a request). A player with sessions in two combos (one from before ab came, say) still counts once per variant.
+function abAggregate(rows: unknown[][]) {
+	type Combo = { ab: string | null; tut: string | null; shade: number | null; sums: AbSums; users: Map<number, AbUser>; counts: AbCounts };
+	const combos = new Map<unknown, Map<unknown, Map<unknown, Combo>>>();
+	const list: Combo[] = [];
+	const firstIn = new Map<number, Combo>(); // each player's first combo
+	const split = new Set<number>(); // the players in more than one
+	for (const r of rows) {
+		const user = r[0] as number, ended = r[2] === 1, played = num(r[3]), robux = num(r[4]) ?? 0, day = r[6] as number;
+		const ab = typeof r[7] === "string" ? r[7] : null, tut = typeof r[8] === "string" ? r[8] : null, shade = r[9] == null ? null : r[9] ? 1 : 0;
+		let byTut = combos.get(ab);
+		if (!byTut) combos.set(ab, (byTut = new Map()));
+		let byShade = byTut.get(tut);
+		if (!byShade) byTut.set(tut, (byShade = new Map()));
+		let combo = byShade.get(shade);
+		if (!combo) {
+			combo = { ab, tut, shade, sums: abSums(), users: new Map(), counts: abCounts() };
+			byShade.set(shade, combo);
+			list.push(combo);
+		}
+		const s = combo.sums;
+		s.sessions += 1;
+		if (ended) {
+			s.ended += 1;
+			if (played !== null) s.played.push(played), played >= 300 && (s.long += 1);
+		}
+		s.robux += robux;
+		s.crashes += num(r[10]) ?? 0;
+		s.offers += num(r[11]) ?? 0;
+		s.taken += num(r[12]) ?? 0;
+		s.bought += num(r[13]) ?? 0;
+		s.streak += num(r[14]) ?? 0;
+		let u = combo.users.get(user);
+		if (!u) {
+			combo.users.set(user, (u = { day, back: false, isNew: false, did: false, robux: 0 }));
+			const was = firstIn.get(user);
+			if (!was) firstIn.set(user, combo);
+			else if (was !== combo) split.add(user);
+		}
+		if (u.day !== day) u.back = true;
+		if (r[1] === 1) u.isNew = true;
+		if (r[5] === 1) u.did = true;
+		u.robux += robux;
+	}
+	type Acc = { sums: AbSums[]; counts: AbCounts; split: Map<number, AbUser> };
+	const accs = new Map<string, Map<string, Acc>>();
+	for (const combo of list) {
+		const shared: [number, AbUser][] = []; // (its players who are in another combo too)
+		for (const [user, u] of combo.users) split.has(user) ? shared.push([user, u]) : abCount(combo.counts, u);
+		// (its experiments: its ab's, and the tutorial's version and shade where ab hasn't them: sessions from before ab)
+		let own: Record<string, unknown> = {};
+		try {
+			own = combo.ab ? JSON.parse(combo.ab) : {};
+		} catch {}
+		const pairs = Object.entries(own).filter((p): p is [string, string] => typeof p[1] === "string");
+		if (!("TutorialVersion" in own) && combo.tut !== null) pairs.push(["TutorialVersion", combo.tut]);
+		if (!("TutorialShade" in own) && combo.shade !== null) pairs.push(["TutorialShade", combo.shade ? "On" : "Off"]);
+		for (const [exp, variant] of pairs) {
+			let byVariant = accs.get(exp);
+			if (!byVariant) accs.set(exp, (byVariant = new Map()));
+			let acc = byVariant.get(variant);
+			if (!acc) byVariant.set(variant, (acc = { sums: [], counts: abCounts(), split: new Map() }));
+			acc.sums.push(combo.sums);
+			const c = acc.counts, add = combo.counts;
+			(c.players += add.players), (c.isNew += add.isNew), (c.newDone += add.newDone), (c.back += add.back), (c.payers += add.payers);
+			// (a player in two combos: their records joined, then counted once)
+			for (const [user, u] of shared) {
+				const m = acc.split.get(user);
+				if (!m) acc.split.set(user, { day: u.day, back: u.back, isNew: u.isNew, did: u.did, robux: u.robux });
+				else (m.back ||= u.back || u.day !== m.day), (m.isNew ||= u.isNew), (m.did ||= u.did), (m.robux += u.robux);
+			}
+		}
+	}
+	const out: any[] = [];
+	for (const [exp, byVariant] of accs) {
+		for (const [variant, acc] of byVariant) {
+			const c = acc.counts;
+			for (const u of acc.split.values()) abCount(c, u);
+			const total = (pick: (s: AbSums) => number) => acc.sums.reduce((a, s) => a + pick(s), 0);
+			const played = new Float64Array(total((s) => s.played.length));
+			let at = 0;
+			for (const s of acc.sums) played.set(s.played, at), (at += s.played.length);
+			const n = played.length;
+			out.push({
+				exp, variant, sessions: total((s) => s.sessions), ended: total((s) => s.ended), long_sessions: total((s) => s.long),
+				avg_played: n ? played.reduce((a, x) => a + x, 0) / n : null,
+				median_played: n ? (n % 2 ? nth(played, (n - 1) / 2) : (nth(played, n / 2 - 1) + nth(played, n / 2)) / 2) : null,
+				robux: total((s) => s.robux), crashes: total((s) => s.crashes), offers: total((s) => s.offers), taken: total((s) => s.taken),
+				bought: total((s) => s.bought), streak_robux: total((s) => s.streak),
+				players: c.players, new_players: c.isNew, came_back: c.back, payers: c.payers, new_done: c.newDone,
+			});
+		}
+	}
+	return out;
+}
+
+// The sums as experiments → variants (control first), with the rates the page compares. The known experiments and their
+// variants are always there (zeros till their first session).
+function abShape(rows: any[]) {
+	const share = (a: number | null, b: number | null) => (b ? Math.round((1000 * (a || 0)) / b) / 1000 : null);
+	const ratio = (a: number | null, b: number | null) => (b ? Math.round((100 * (a || 0)) / b) / 100 : null);
+	const round = (x: number | null) => (x == null ? null : Math.round(x));
+	const byKey = new Map<string, Map<string, any>>();
+	for (const r of rows) {
+		if (!byKey.has(r.exp)) byKey.set(r.exp, new Map());
+		byKey.get(r.exp)!.set(String(r.variant), r);
+	}
+	const keys = [...Object.keys(AB_KNOWN), ...[...byKey.keys()].filter((k) => !AB_KNOWN[k]).sort()];
+	return keys.map((key) => {
+		const found = byKey.get(key) ?? new Map<string, any>();
+		const order = AB_KNOWN[key] ?? [];
+		const names = [...order, ...[...found.keys()].filter((v) => !order.includes(v)).sort()];
+		const tutorial = key.startsWith("Tutorial");
+		return {
+			key,
+			variants: names.map((variant) => {
+				const r = found.get(variant) ?? {};
+				return {
+					variant,
+					sessions: r.sessions ?? 0,
+					ended: r.ended ?? 0,
+					players: r.players ?? 0,
+					new_players: r.new_players ?? 0,
+					avg_played: round(r.avg_played),
+					median_played: round(r.median_played),
+					long_sessions: r.long_sessions ?? 0,
+					long_share: share(r.long_sessions, r.ended),
+					returning: r.came_back ?? 0,
+					returning_share: share(r.came_back, r.players),
+					robux: r.robux ?? 0,
+					robux_per_player: ratio(r.robux, r.players),
+					payers: r.payers ?? 0,
+					payer_share: share(r.payers, r.players),
+					new_done: tutorial ? (r.new_done ?? 0) : null,
+					tut_done_share: tutorial ? share(r.new_done, r.new_players) : null,
+					crashes: r.crashes ?? 0,
+					crashes_per_session: ratio(r.crashes, r.ended),
+					streak: { offers: r.offers ?? 0, taken: r.taken ?? 0, bought: r.bought ?? 0, robux: r.streak_robux ?? 0 },
+				};
+			}),
+		};
+	});
+}
+
+async function abData(days: number, studio: boolean, env: Env) {
+	const rows = await env.DB.prepare(abSql(studio)).bind(Date.now() / 1000 - days * 86400).raw<unknown[]>();
+	return { now: Date.now() / 1000, days, min: AB_MIN_PLAYERS, sessions: rows.length, experiments: abShape(abAggregate(rows)) };
+}
+
+// GET /api/ab?days=7[&studio=1] (and /api/agent/ab). age: seconds since it was worked out; every: how long an answer is
+// kept for this period (the page waits that long between asks). (Kept per isolate: the Cache API does nothing on a
+// workers.dev address.)
+const abMemo = new Map<string, { data: Awaited<ReturnType<typeof abData>>; every: number }>();
+async function ab(url: URL, env: Env): Promise<Response> {
+	const asked = Number(url.searchParams.get("days") || "7");
+	const days = Math.round(Math.min(Math.max(Number.isFinite(asked) ? asked : 7, 0.04), AB_MAX_DAYS) * 100) / 100;
+	const studio = url.searchParams.get("studio") === "1";
+	const key = `${days}/${studio ? 1 : 0}`;
+	let memo = abMemo.get(key);
+	if (!memo || Date.now() / 1000 - memo.data.now >= memo.every) {
+		const data = await abData(days, studio, env);
+		memo = { data, every: Math.max(AB_MIN_SECONDS, Math.ceil((data.sessions * 3600) / AB_READS_AN_HOUR)) };
+		if (abMemo.size >= 16) abMemo.clear();
+		abMemo.set(key, memo);
+	}
+	return json({ ...memo.data, age: Math.max(0, Math.round(Date.now() / 1000 - memo.data.now)), every: memo.every });
 }
 
 // Where each session ended (its "Se salió del juego" line) with why they left: the exits' heat map
@@ -1161,6 +1414,8 @@ async function digestData(days: number, env: Env) {
 		   WHERE kind = 'servidor' AND text LIKE 'Se salió%' AND NOT (x = 0 AND z = 0) GROUP BY 1, 2 ORDER BY n DESC LIMIT 8`),
 		db.prepare(`SELECT COUNT(*) AS n FROM sessions WHERE ended = 0 AND studio = 0 AND last_at >= ?1`).bind(Date.now() / 1000 - LIVE_SECONDS),
 	]);
+	// (the A/B tests: their own compact read of the period, summed here)
+	const abTests = (await abData(days, false, env)).experiments;
 	return {
 		days,
 		generated: new Date().toISOString(),
@@ -1178,6 +1433,7 @@ async function digestData(days: number, env: Env) {
 		windows: windows.results,
 		review: review.results,
 		exitHotspots: exits.results,
+		abTests,
 	};
 }
 
@@ -1241,6 +1497,24 @@ function digestMarkdown(d: Awaited<ReturnType<typeof digestData>>, base: string,
 		L(`\n### Why players left on each step`, `\n### Motivos de los que se fueron en cada paso`),
 		table(L("version,step,w,sessions,example", "versión,paso,w,sesiones,ejemplo").split(","), d.tutorialDropReasons.map((r: any) => [r.version, r.step, r.w, r.n, r.example])),
 	);
+	// (only the experiments with sessions; a variant is its players' sessions with it in the period)
+	const share = (x: number | null) => (x == null ? "—" : `${Math.round(100 * x)}%`);
+	const abRows = d.abTests.filter((x) => x.variants.some((v) => v.sessions > 0)).flatMap((x) => x.variants.map((v) => ({ key: x.key, ...v })));
+	out.push(
+		L(`\n## A/B tests (live split from our sessions; Roblox's own report comes days later)`, `\n## Pruebas A/B (reparto en vivo con nuestras sesiones; el informe de Roblox llega días después)`),
+		L(`Fewer than ${AB_MIN_PLAYERS} players in a variant: too early to call.`, `Con menos de ${AB_MIN_PLAYERS} jugadores en una variante: aún no se puede decidir.`),
+		table(
+			L(
+				"experiment,variant,players,new,avg session,median,5 min+,came back,Robux/player,payers,tutorial done (new),crashes/session,streak offers/taken/bought/R$",
+				"experimento,variante,jugadores,nuevos,duración media,mediana,5 min+,volvieron,Robux/jugador,pagaron,terminaron tutorial (nuevos),choques/sesión,racha ofertas/aceptadas/compradas/R$",
+			).split(","),
+			abRows.map((r) => [
+				r.key, r.variant, r.players, r.new_players, mins(r.avg_played), mins(r.median_played), share(r.long_share), share(r.returning_share),
+				r.robux_per_player, `${r.payers} (${share(r.payer_share)})`, r.tut_done_share == null ? null : `${r.new_done} (${share(r.tut_done_share)})`,
+				r.crashes_per_session, `${r.streak.offers}/${r.streak.taken}/${r.streak.bought}/${r.streak.robux}`,
+			]),
+		),
+	);
 	out.push(
 		L(`\n## Frustration signals (what and where)`, `\n## Señales de frustración (por qué y sobre qué)`),
 		table(L("signal,about,times,sessions", "señal,sobre,veces,sesiones").split(","), d.signals.map((r: any) => [tag(r.tag), r.target, r.n, r.sessions])),
@@ -1266,7 +1540,7 @@ function digestMarkdown(d: Awaited<ReturnType<typeof digestData>>, base: string,
 			d.review.map((r: any) => [`${base}/#/s/${r.id}`, r.name, r.first ? yes : no, mins(r.played), r.score, (r.tags || "").split(",").map(tag).join(", "), r.reason]),
 		),
 	);
-	out.push(L(`\nMore detail: GET /api/agent/session/<id>?format=md · /api/agent/player/<userId> · /api/agent/funnel`, `\nMás detalle: GET /api/agent/session/<id>?format=md · /api/agent/player/<userId> · /api/agent/funnel`));
+	out.push(L(`\nMore detail: GET /api/agent/session/<id>?format=md · /api/agent/player/<userId> · /api/agent/funnel · /api/agent/ab`, `\nMás detalle: GET /api/agent/session/<id>?format=md · /api/agent/player/<userId> · /api/agent/funnel · /api/agent/ab`));
 	return out.join("\n");
 }
 
@@ -1326,7 +1600,8 @@ async function agentRoute(path: string, url: URL, env: Env): Promise<Response> {
 	if (path.endsWith("/sessions")) return await sessionList(url, env);
 	if (path.endsWith("/review")) return await review(url, env);
 	if (path.endsWith("/problems")) return await problems(url, env);
-	return json({ error: "not found", routes: ["digest", "session/<id>", "player/<userId>", "funnel", "sessions", "review", "problems"] }, 404);
+	if (path.endsWith("/ab")) return await ab(url, env);
+	return json({ error: "not found", routes: ["digest", "session/<id>", "player/<userId>", "funnel", "sessions", "review", "problems", "ab"] }, 404);
 }
 
 /* ---------- packing: a session over becomes ONE compressed chunk (a cron, one session at a time) ---------- */
@@ -1532,6 +1807,7 @@ export default {
 				if (path === "/api/points") return await points(url, env);
 				if (path === "/api/exits") return await exits(url, env);
 				if (path === "/api/funnel") return await funnel(url, env);
+				if (path === "/api/ab") return await ab(url, env);
 				if (path === "/api/stats") return await stats(url, env);
 				if (path === "/api/review") return await review(url, env);
 				if (path === "/api/problems") return await problems(url, env);

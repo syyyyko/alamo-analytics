@@ -4,6 +4,7 @@
 //   node tools/ask.mjs player <userId>       one player's sessions and signals (JSON)
 //   node tools/ask.mjs funnel [days]         the tutorial funnel's sessions (JSON)
 //   node tools/ask.mjs review [days]         sessions worth watching (JSON)
+//   node tools/ask.mjs ab [days]             the A/B tests, each variant's numbers (JSON, 30 days at most)
 //   add --local to read the local `wrangler dev` (127.0.0.1:8787, key from .dev.vars AGENT_KEY)
 // The key comes from .agent-key next to this folder (never printed).
 import fs from "node:fs";

@@ -14,6 +14,7 @@ You can see:
 - a 3D replay of the session, with the traffic and police around the player;
 - why players leave;
 - the tutorial funnel;
+- the A/B tests (Roblox's experiments), live;
 - a points map;
 - a heat map of where players leave;
 - sessions worth reviewing.
@@ -111,7 +112,7 @@ node tools/fake-game.mjs http://127.0.0.1:8787/ingest
 node tools/ask.mjs digest 7
 ```
 
-`session <id>`, `player <userId>`, `funnel` and `review` also work. They use the read-only key in `.agent-key`.
+`session <id>`, `player <userId>`, `funnel`, `review` and `ab` also work. They use the read-only key in `.agent-key`.
 
 ---
 

@@ -1,5 +1,7 @@
 // Pretends to be a game server: sends a few made-up sessions (in chunks, gzip, like the real one) to the ingest.
 // node tools/fake-game.mjs [url] [key]   (default: the local dev server and .dev.vars' key)
+// N: sessions a run (default 8, 40 at most). FAKE_USER0: the first player's UserId (default 1000); only a player's first
+// 4 plays are kept, so a new FAKE_USER0 for more players, the same one again for players coming back.
 import { gzipSync } from "node:zlib";
 
 const url = process.argv[2] || "http://localhost:8787/ingest";
@@ -7,11 +9,22 @@ const key = process.argv[3] || "dev-ingest-key";
 const now = Date.now() / 1000;
 const rand = (a, b) => a + Math.random() * (b - a);
 const pick = (list) => list[Math.floor(Math.random() * list.length)];
+const user0 = Number(process.env.FAKE_USER0 || 1000);
+// A/B variants (meta.ab), the same for a player every run, like Roblox's experiments: one coin per experiment
+const coin = (user, salt) => (Math.imul(user ^ salt, 2654435761) >>> 16) % 2 === 1;
 
 function makeSession(i) {
 	const id = Math.random().toString(36).slice(2, 14);
 	const first = i % 2 === 0;
 	const start = now - rand(600, 6 * 86400);
+	const user = user0 + i;
+	let tutVersion = coin(user, 11) ? "B" : "A";
+	const shade = coin(user, 23);
+	// (a quarter as the game before 2026-11-12 sent them: no meta.ab, the tutorial's version and shade only)
+	const ab = Math.random() < 0.25
+		? undefined
+		: { TutorialVersion: tutVersion, TutorialShade: shade ? "On" : "Off", CrashPanel: coin(user, 37) ? "Off" : "On", StreakOffer: coin(user, 41) ? "Double" : "Recover" };
+	if (!ab && tutVersion === "A" && Math.random() < 0.5) tutVersion = ""; // (the old game's version A was "")
 	const lines = [];
 	let q = 0;
 	let t = 0;
@@ -58,6 +71,11 @@ function makeSession(i) {
 	t += 5;
 	add("servidor", "Se salió del juego");
 	const played = t;
+	// the keep-the-streak / double-it offer: shown after some crashes, sometimes taken, sometimes with Robux (25 each)
+	const offers = Math.floor(rand(0, 4));
+	const taken = Math.floor(rand(0, offers + 1));
+	const bought = Math.floor(rand(0, taken + 1));
+	const streak = { offers, taken, bought, robux: bought * 25 };
 	const end = {
 		played,
 		afk: 0,
@@ -86,7 +104,8 @@ function makeSession(i) {
 		earned: 12000,
 		spent: 5000,
 		income: { Carretera: 9000, "Día 1": 3000 },
-		robux: Math.random() < 0.2 ? 99 : 0,
+		robux: (Math.random() < 0.2 ? 99 : 0) + streak.robux,
+		streak,
 		bought: [{ g: "Casco y lentes", n: "Casco Rojo", p: 5000 }],
 		tried: [{ g: "Casco y lentes", n: "Casco Neón", why: "sin dinero", p: 20000, c: 2 }],
 		windows: { Garage: { name: "Garage", opens: 3, seconds: 40 }, Shop: { name: "Tienda", opens: 1, seconds: 12 } },
@@ -99,9 +118,12 @@ function makeSession(i) {
 		bestCombo: 7,
 		level: first ? 2 : 12,
 		xpGain: 800,
-		tutorial: first ? { version: "A", step: steps, total: 8, done: steps >= 8, name: `paso ${steps}` } : { version: "A", step: 9, total: 8, done: true },
+		tutorial: first
+			? { version: tutVersion, shade, step: steps, total: 8, done: steps >= 8, name: `paso ${steps}` }
+			: { version: tutVersion, shade, step: 9, total: 8, done: true },
 	};
-	return { id, user: 1000 + i, name: `Jugador${i}`, display: `Jugador ${i}`, start, lines, end, meta: { first, device: end.device } };
+	// (dropAb: its last send comes without meta.ab, as a send that lacks it: the row must keep the one it had)
+	return { id, user, name: `Jugador${user}`, display: `Jugador ${user}`, start, lines, end, meta: { first, device: end.device, ab }, dropAb: Math.random() < 0.2 };
 }
 
 const sessions = Array.from({ length: Number(process.env.N || 8) }, (_, i) => makeSession(i));
@@ -123,7 +145,7 @@ for (const part of [0, 1]) {
 				display: s.display,
 				start: s.start,
 				seq: part + 1,
-				meta: s.meta,
+				meta: part === 1 && s.dropAb ? { ...s.meta, ab: undefined } : s.meta,
 				lines: part === 0 ? s.lines.slice(0, half) : s.lines.slice(half),
 				end: part === 1 ? s.end : undefined,
 			};
